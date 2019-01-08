@@ -20,8 +20,11 @@ package com.bolingcavalry;
 
 import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.typeutils.TupleTypeInfo;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks;
@@ -29,7 +32,9 @@ import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+import org.apache.flink.streaming.api.windowing.windows.Window;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer011;
+import org.apache.flink.util.Collector;
 
 import javax.annotation.Nullable;
 import java.util.Properties;
@@ -79,29 +84,66 @@ public class StreamingJob {
 			}
 		});
 
+//		.flatMap(new FlatMapFunction<String, Tuple2<String, Integer>>() {
+//			@Override
+//			public void flatMap(String value, Collector<Tuple2<String, Integer>> out) {
+//				for (String word : value.split("\\s")) {
+//					out.collect(Tuple2.of(word, 1));
+//				}
+//			}
+//		})
+//				.flatMap((FlatMapFunction<String, Tuple2<String, Long>>) (s, collector) -> {
+//					SingleMessage singleMessage = JSONHelper.parse(s);
+//
+//					if (null != singleMessage) {
+//						collector.collect(new Tuple2<>(singleMessage.getName(), 1L));
+//					}
+//				})
+//.apply((WindowFunction<Tuple2<String, Long>, Tuple2<String, Long>, Tuple, TimeWindow>) (tuple, window, input, out) -> {
+//			long sum = 0L;
+//			for (Tuple2<String, Long> record: input) {
+//				sum += record.f1;
+//			}
+//
+//			Tuple2<String, Long> result = input.iterator().next();
+//			result.f1 = sum;
+//			out.collect(result);
+//		})
+
+
 		env.addSource(consumer)
 				//将原始消息转成Tuple2对象，保留用户名称和访问次数(每个消息访问次数为1)
-				.flatMap((FlatMapFunction<String, Tuple2<String, Long>>) (s, collector) -> {
-					SingleMessage singleMessage = JSONHelper.parse(s);
-
-					if (null != singleMessage) {
-						collector.collect(new Tuple2<>(singleMessage.getName(), 1L));
+				.flatMap(new FlatMapFunction<String, Tuple2<String,Long>>() {
+					@Override
+					public void flatMap(String s, Collector<Tuple2<String, Long>> out) {
+						SingleMessage singleMessage = JSONHelper.parse(s);
+						if (null != singleMessage) {
+							out.collect(new Tuple2<>(singleMessage.getName(), 1L));
+						}
 					}
 				})
+//				.returns(TypeInformation.of(new TypeHint<Tuple2<String,Long>>() {}))
+//				.returns(new TupleTypeInfo(TypeInformation.of(String.class), TypeInformation.of(Long.class)))
 				//以用户名为key
 				.keyBy(0)
 				//时间窗口为2秒
 				.timeWindow(Time.seconds(2))
 				//将每个用户访问次数累加起来
-				.apply((WindowFunction<Tuple2<String, Long>, Tuple2<String, Long>, Tuple, TimeWindow>) (tuple, window, input, out) -> {
-					long sum = 0L;
-					for (Tuple2<String, Long> record: input) {
-						sum += record.f1;
-					}
+				.apply(new WindowFunction<Tuple2<String, Long>, Tuple2<String, Long>, Tuple, TimeWindow>() {
+					@Override
+					public void apply(Tuple tuple,
+									  TimeWindow window,
+									  Iterable<Tuple2<String, Long>> input,
+									  Collector<Tuple2<String, Long>> out){
+						long sum = 0L;
+						for (Tuple2<String, Long> record: input) {
+							sum += record.f1;
+						}
 
-					Tuple2<String, Long> result = input.iterator().next();
-					result.f1 = sum;
-					out.collect(result);
+						Tuple2<String, Long> result = input.iterator().next();
+						result.f1 = sum;
+						out.collect(result);
+					}
 				})
 				//输出方式是STDOUT
 				.print();
